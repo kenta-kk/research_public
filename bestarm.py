@@ -12,9 +12,11 @@ K = int(10)
 # アームの真の平均(固定, 一様ランダムで決めた)
 true_means = [0.04799676, 0.65712573, 0.17555852, 0.56573422, 0.79480353, 0.27867847,
               0.03943761, 0.20156264, 0.64060331, 0.12827873]
+# エラー許容率
+Delta = 1e-5
 
 def reward_sample(mean: float, variance: float ) -> float:
-    reward = random.gauss(mean, variance)
+    reward = random.gauss(mean, np.sqrt(variance))
     return reward
 
 # w*の計算
@@ -75,11 +77,10 @@ def find_w_stars(means: list, epsilon: float) -> list:
     best_arm = np.argmax(means)
     max_mean = max(means)
     x_arms = [0] * K
-    x_best_arm = 1
-    x_arms[best_arm] = x_best_arm
+
     for i in range(K):
         if i == best_arm:
-            continue
+            x_arms[i] = 1
         else:
             x_arms[i] = inverse_g_a_func(y=y_star, mu1=max_mean, mua=means[i])
     for i in range(K):
@@ -92,16 +93,13 @@ def sample_d_track(means: list, epsilon: float):
     t = 0 # タイムステップt
     N_a_t = [0] * K # 時刻tにおけるアームaを引いた回数のリスト
     sample_means = [0] * K # 標本平均(最初はゼロ)
-    # Stopping ruleは後で作って、この無限ループに取り入れる
-    # とりあえずStopping ruleできるまで仮に停止時間Tを決めておく
-    T = 100
-
     # t = 1 の時は別に切り出して書くことにする
     selected_arm_1 = random.randint(0, K-1)
-    sample_reward = reward_sample(mean=means[selected_arm_1], variance=epsilon)
+    sample_reward = reward_sample(mean=means[selected_arm_1], variance=var)
     t += 1
     N_a_t[selected_arm_1] += 1
     sample_means[selected_arm_1] = sample_reward
+    T = 100000
 
     while True:
         arms_belong_D_rule = []
@@ -121,12 +119,50 @@ def sample_d_track(means: list, epsilon: float):
             N_a_t[selected_arm] += 1
         sampled_reward = reward_sample(mean=means[selected_arm], variance=var)
         t += 1
-        sample_means[selected_arm] = sample_means[selected_arm] + (sampled_reward - sample_means[selected_arm]) / N_a_t[selected_arm]
+        sample_means[selected_arm] += (sampled_reward - sample_means[selected_arm]) / N_a_t[selected_arm]
         print('N_a_t:', N_a_t)
+        for i in range(K):
+            for j in range(K):
+                if sample_means[i] >= sample_means[j] and i != j:
+                    likelihood_ratio = generalized_likelihood_ratio(i, j, sample_means[i], sample_means[j])
+                    threshold = exploration_rate(t=t, error_tolerance=Delta)
+                    if likelihood_ratio > threshold:
+                        return sample_means
         if t > T:
             return sample_means
 
-def weighted_sample_mean():
-def generalized_likelihood_ratio():
+# arm a, b に対する標本平均の重みつき和
+# 引いた回数が2本のアームとも0のときは0を返すことにする
+def weighted_sample_mean(num_arm_draw1: int,num_arm_draw2:int, mean_arm1: float, mean_arm2: float) -> float:
+    num1 = num_arm_draw1
+    num2 = num_arm_draw2
+    m1 = mean_arm1
+    m2 = mean_arm2
+    if num1 == 0 and num2 == 0:
+        return 0
+    else:
+        weighted_mean = ((num1) / (num1 + num2)) * m1 + ((num2) / (num1 + num2)) * m2
+    return weighted_mean
 
-def stop_threshold():
+# ガウス分布の場合、KLが対称性もつので、尤度比も対称性持つ
+# だから、ここではarm1と2に対する大小関係による場合分けをしない。
+def generalized_likelihood_ratio(num_arm_draw1:int, num_arm_draw2:int, mean_arm1: float, mean_arm2: float) -> float:
+    num1 = num_arm_draw1
+    num2 = num_arm_draw2
+    m1 = mean_arm1
+    m2 = mean_arm2
+    wm12 = weighted_sample_mean(num_arm_draw1=num1, num_arm_draw2=num2, mean_arm1=m1, mean_arm2=m2)
+    gen_likelihood_ratio = num1 * (kl_divergence(x=m1, y=wm12)) + num2 * (kl_divergence(x=m2, y=wm12))
+    return gen_likelihood_ratio
+
+# 厳密に理論保証を満たすものではないが、論文のExperimentにしたがう設定でやる
+def exploration_rate(t:int, error_tolerance:float) -> float:
+    delta = error_tolerance
+    beta = np.log((np.log(t) + 1) / delta)
+    return beta
+
+sample_means = sample_d_track(means=true_means, epsilon=0.0000001)
+print('sample_means:',sample_means)
+print('ref_best_arm:', np.argmax(sample_means))
+print('true_means:',true_means)
+print('true_best_arm:', np.argmax(true_means))
